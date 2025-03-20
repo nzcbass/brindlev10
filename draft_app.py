@@ -230,26 +230,13 @@ def process_cv_pipeline(file_path: str, filename: str) -> dict:
             logging.error(f"Failed to generate CV document for {filename}")
             raise Exception("Failed to generate CV document")
         
-        # Final step: Save document to Downloads folder
-        logging.info(f"Saving document to Downloads folder for {filename}")
-        if os.path.exists(output_path):
-            download_path = save_output_to_downloads(output_path)
-            if not download_path:
-                logging.error(f"Failed to save file to Downloads folder for {filename}")
-                raise Exception("Failed to save file to Downloads folder")
-            track_file(download_path, "download", "saved", "File saved to Downloads folder")
-            download_url = f"/download/{os.path.basename(output_path)}"
-            logging.info(f"File saved successfully to Downloads folder for {filename}")
-        else:
-            logging.error(f"Generated file not found at {output_path} for {filename}")
-            raise FileNotFoundError(f"Generated file not found at {output_path}")
-
+        # Do not save to Downloads folder here
         logging.info(f"CV processing completed successfully for: {filename}")
         return {
             'success': True,
             'message': f'CV processed successfully: {sanitized_base_name}',
             'download_file': os.path.basename(output_path),
-            'download_url': download_url
+            'download_url': f"/download/{os.path.basename(output_path)}"
         }
         
     except Exception as e:
@@ -262,7 +249,7 @@ def process_cv_pipeline(file_path: str, filename: str) -> dict:
 
 @app.route('/download/<filename>')
 def download_file(filename):
-    """Serve the file for download with error handling."""
+    """Serve the file for download and save it to the Downloads folder."""
     try:
         logging.info(f"Initiating download request for: {filename}")
         file_path = os.path.join(app.root_path, 'outputs', filename)
@@ -270,15 +257,19 @@ def download_file(filename):
         if not os.path.exists(file_path):
             logging.warning(f"Download failed - File not found: {filename}")
             raise FileNotFoundError(f"File not found: {filename}")
-            
-        logging.info(f"File found, initiating download: {filename}")
-        result = send_from_directory(
+        
+        # Save the file to the Downloads folder
+        download_path = save_output_to_downloads(file_path)
+        if not download_path:
+            logging.error(f"Failed to save file to Downloads folder for {filename}")
+            raise Exception("Failed to save file to Downloads folder")
+        
+        logging.info(f"File saved successfully to Downloads folder for {filename}")
+        return send_from_directory(
             os.path.join(app.root_path, 'outputs'),
             filename, 
             as_attachment=True
         )
-        logging.info(f"Download completed successfully: {filename}")
-        return result
         
     except Exception as e:
         logging.error(f"Error downloading file: {filename}: {e}")
@@ -306,3 +297,10 @@ def internal_server_error(error):
 if __name__ == '__main__':
     logging.info("Starting CV Generator application")
     app.run(debug=True)
+
+    # List files used during execution
+    import sys
+    print("Files used during execution:")
+    for module in sys.modules.values():
+        if hasattr(module, '__file__') and module.__file__:
+            print(module.__file__)
