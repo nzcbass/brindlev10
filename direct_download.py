@@ -4,6 +4,7 @@ import shutil
 from pathlib import Path
 from typing import Optional, Union
 import io
+from utils import sanitize_filename  # Import the utility function
 
 def get_downloads_folder() -> Path:
     """Get the user's downloads folder path based on the operating system."""
@@ -50,8 +51,11 @@ def save_output_to_downloads(output_file_path: Union[str, Path],
         if not downloads_folder.exists():
             downloads_folder.mkdir(parents=True, exist_ok=True)
         
-        # Use the same filename as the source
-        dest_path = downloads_folder / output_path.name
+        # Sanitize the filename
+        sanitized_filename = sanitize_filename(new_filename or output_path.name)
+        
+        # Use the sanitized filename
+        dest_path = downloads_folder / sanitized_filename
         
         # Avoid overwriting by appending a counter if needed
         counter = 1
