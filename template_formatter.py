@@ -3,11 +3,71 @@ from firebase_utils import FirebaseConfig
 # Instantiate FirebaseConfig so we can call its methods.
 firebase_config = FirebaseConfig()
 
+def emergency_debug_text_processor(text: str) -> str:
+    """
+    Emergency debug function to ensure slash spacing works.
+    Add this to any text function that processes output.
+    """
+    if not isinstance(text, str):
+        return text
+        
+    # Explicitly handle slashes for debugging
+    if '/' in text:
+        print(f"EMERGENCY DEBUG - Found slash in: {text}")
+        fixed = text.replace('/', '/ ')
+        print(f"EMERGENCY DEBUG - Fixed to: {fixed}")
+        return fixed
+    return text
+
+def force_capitalize_positions(text: str) -> str:
+    """
+    Direct and forceful capitalization of position titles and words after slashes.
+    """
+    if not text or "• " not in text:
+        return text
+    
+    # Process each line individually
+    lines = text.split("\n")
+    result_lines = []
+    
+    print(f"FORCE CAPITALIZE - Input: {text}")
+    
+    for line in lines:
+        if line.startswith("• "):
+            # Extract the content after the bullet
+            position_text = line[2:].replace('/', '/ ').replace('  ', ' ')
+            
+            # Now capitalize each word, including after slashes
+            words = position_text.split()
+            capitalized_words = []
+            
+            # First word is always capitalized
+            if words:
+                capitalized_words.append(words[0].capitalize())
+                
+            # For remaining words, check if "AND" and handle specially
+            for i in range(1, len(words)):
+                word = words[i]
+                if word.upper() == "AND":
+                    capitalized_words.append("and")  # Hard fix for "AND" -> "and"
+                else:
+                    capitalized_words.append(word.capitalize())
+            
+            capitalized_position = ' '.join(capitalized_words)
+            result_lines.append(f"• {capitalized_position}")
+            print(f"FORCE CAPITALIZE - Processed line: '• {capitalized_position}'")
+        else:
+            result_lines.append(line)
+    
+    result = '\n'.join(result_lines)
+    print(f"FORCE CAPITALIZE - Result: {result}")
+    return result
+
 def format_company_and_position_placeholders(placeholder_mapping: dict) -> dict:
     """
     Formats placeholders for consistent capitalization and formatting:
-    - List items: Converts to bullet points with proper capitalization
-    - Text fields: Ensures proper capitalization (first letter uppercase, rest lowercase)
+    - List items: Converts to bullet points with proper formatting
+    - Text fields: Ensures proper capitalization for specific fields
     
     Args:
         placeholder_mapping (dict): Dictionary containing placeholder mappings
@@ -17,12 +77,6 @@ def format_company_and_position_placeholders(placeholder_mapping: dict) -> dict:
     """
     # Country acronyms to preserve
     country_acronyms = {'UAE', 'KSA', 'USA', 'UK'}
-    
-    # Words that should remain lowercase (unless at start)
-    lowercase_words = {
-        'a', 'an', 'and', 'as', 'at', 'but', 'by', 'for', 'in',
-        'of', 'on', 'or', 'the', 'to', 'with'
-    }
     
     # Format bullet-pointed lists
     keys_to_format = [
@@ -35,111 +89,87 @@ def format_company_and_position_placeholders(placeholder_mapping: dict) -> dict:
     
     for key in keys_to_format:
         value = placeholder_mapping.get(key, "")
-        # Skip formatting if the value is empty or 'None'
         if not value or value.strip().lower() == "none":
             continue
 
         # Split the string on semicolons
         items = [item.strip() for item in value.split(";") if item.strip()]
-        deduped = []
+        formatted_items = []
         seen = set()
+        
         for item in items:
-            # Format each word in the item
-            words = item.split()
-            formatted_words = []
-            for word in words:
-                # Check if word is a country acronym
-                if word.upper() in country_acronyms:
-                    formatted_words.append(word.upper())
-                # Handle hyphenated words
-                elif '-' in word:
-                    formatted_word = '-'.join(part.capitalize() for part in word.split('-'))
-                    formatted_words.append(formatted_word)
-                else:
-                    formatted_words.append(word.capitalize())
-            formatted_item = ' '.join(formatted_words)
+            # For positions, apply specific formatting with all words capitalized
+            if key in ["{NZPositions}", "{InternationalPositions}"]:
+                # First add space after slash
+                item_with_space = item.replace('/', '/ ').replace('  ', ' ')
+                # Then capitalize all words and apply hard fix for "AND"
+                words = item_with_space.split()
+                formatted_words = []
+                
+                # First word is always capitalized
+                if words:
+                    formatted_words.append(words[0].capitalize())
+                
+                # For remaining words, check if "AND" and handle specially
+                for i in range(1, len(words)):
+                    word = words[i]
+                    if word.upper() == "AND":
+                        formatted_words.append("and")  # Hard fix for "AND" -> "and"
+                    else:
+                        formatted_words.append(word.capitalize())
+                
+                formatted_item = ' '.join(formatted_words)
+            else:
+                # For non-position items, use standard capitalization with AND fix
+                words = item.split()
+                formatted_words = []
+                
+                # First word is always capitalized
+                if words:
+                    formatted_words.append(words[0].capitalize())
+                
+                # For remaining words, check if "AND" and handle specially
+                for i in range(1, len(words)):
+                    word = words[i]
+                    if word.upper() == "AND":
+                        formatted_words.append("and")  # Hard fix for "AND" -> "and"
+                    else:
+                        formatted_words.append(word.capitalize())
+                
+                formatted_item = ' '.join(formatted_words)
+                
+                # Add spaces after slashes
+                if '/' in formatted_item:
+                    formatted_item = formatted_item.replace('/', '/ ').replace('  ', ' ')
+            
+            # Preserve country acronyms
+            for acronym in country_acronyms:
+                acronym_pattern = f"\\b{acronym.lower().capitalize()}\\b"
+                formatted_item = formatted_item.replace(acronym.lower().capitalize(), acronym)
             
             # Remove duplicates (case-insensitive)
             if formatted_item.lower() not in seen:
-                deduped.append(formatted_item)
+                formatted_items.append(formatted_item)
                 seen.add(formatted_item.lower())
-                
-        # Join items as a bullet list
-        bullet_list = "\n".join(["• " + item for item in deduped])
-        placeholder_mapping[key] = bullet_list if bullet_list else "None"
-    
-    # Format simple text fields with proper capitalization
-    keys_to_capitalize = [
-        "{FullName}",
-        "{CurrentLocation}"
-    ]
-    
-    for key in keys_to_capitalize:
-        value = placeholder_mapping.get(key, "")
-        if not value or value.strip().lower() == "none":
-            continue
-            
-        # Format each word in the value
-        words = value.split()
-        formatted_words = []
-        for word in words:
-            # Check if word is a country acronym
-            if word.upper() in country_acronyms:
-                formatted_words.append(word.upper())
-            # Handle hyphenated words
-            elif '-' in word:
-                formatted_word = '-'.join(part.capitalize() for part in word.split('-'))
-                formatted_words.append(formatted_word)
-            else:
-                formatted_words.append(word.capitalize())
-        placeholder_mapping[key] = ' '.join(formatted_words)
-    
-    # Special handling for position titles
-    if "{Position}" in placeholder_mapping:
-        value = placeholder_mapping["{Position}"]
-        if value and value.strip().lower() != "none":
-            words = value.split()
-            formatted_words = []
-            for i, word in enumerate(words):
-                # First word is always capitalized
-                if i == 0:
-                    if '-' in word:
-                        formatted_word = '-'.join(part.capitalize() for part in word.split('-'))
-                        formatted_words.append(formatted_word)
-                    else:
-                        formatted_words.append(word.capitalize())
-                # Handle subsequent words
-                else:
-                    # Check if word should be lowercase
-                    if word.lower() in lowercase_words:
-                        formatted_words.append(word.lower())
-                    # Handle hyphenated words
-                    elif '-' in word:
-                        formatted_word = '-'.join(part.capitalize() for part in word.split('-'))
-                        formatted_words.append(formatted_word)
-                    else:
-                        formatted_words.append(word.capitalize())
-            placeholder_mapping["{Position}"] = ' '.join(formatted_words)
         
+        # Join items as a bullet list
+        bullet_list = "\n".join(["• " + item for item in formatted_items])
+        placeholder_mapping[key] = bullet_list
+        
+        # Apply special capitalization for position lists
+        if key in ["{NZPositions}", "{InternationalPositions}"]:
+            placeholder_mapping[key] = force_capitalize_positions(placeholder_mapping[key])
+        
+        # Print debug info - keep this for troubleshooting
+        print(f"DEBUG - {key}: {placeholder_mapping[key]}")
+    
+    # Apply emergency debug processor as a final step
+    for key in placeholder_mapping:
+        if isinstance(placeholder_mapping[key], str):
+            placeholder_mapping[key] = emergency_debug_text_processor(placeholder_mapping[key])
+    
     return placeholder_mapping
 
-# Example testing
-if __name__ == "__main__":
-    sample_mapping = {
-        "{InternationalEmployers}": "ABC Company; abc company; XYZ Corp; xyz corp",
-        "{NZEmployers}": "KEANGMAN, ENTERPRISES LTD.; NZ Company; nz company; ABC",
-        "{NZPositions}": "Senior Developer; Senior Developer; Lead Engineer",
-        "{InternationalPositions}": "Manager; Manager; Director",
-        "{FullName}": "JOHN DOE",
-        "{Position}": "SOFTWARE ENGINEER",
-        "{CurrentLocation}": "SYDNEY, AUSTRALIA",
-        "{Qualifications}": "BACHELOR OF SCIENCE; MASTER OF SCIENCE"
-    }
-    formatted_mapping = format_company_and_position_placeholders(sample_mapping)
-    print("Formatted mapping:")
-    for k, v in formatted_mapping.items():
-        print(f"{k}:\n{v}\n")
-        
 def format_name(name_str):
     """
     Format a name string: First letter of each word capitalized, rest lowercase.
