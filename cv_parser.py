@@ -26,7 +26,7 @@ load_dotenv('config.env')
 # Configuration constants
 PARSER_API_URL = os.environ.get("PARSER_API_URL", "https://cvparser.ai/api/v4/parse")
 PARSER_API_KEY = os.environ.get("PARSER_API_KEY", "")
-CVPARSER_TIMEOUT = int(os.getenv('CVPARSER_TIMEOUT_SECONDS', '30'))
+CVPARSER_TIMEOUT = int(os.getenv('CVPARSER_TIMEOUT_SECONDS', '45'))
 
 print(f"Debug - API URL: {PARSER_API_URL}")
 print(f"Debug - API Key loaded: {'Yes' if PARSER_API_KEY else 'No'} (Length: {len(PARSER_API_KEY)})")
@@ -179,8 +179,8 @@ class CVParser:
 
             except requests.Timeout:
                 msg = "Complex file structure found, please save this resume as a PDF then upload again, this should solve the problem."
-                track_file(file_url, "parse", "timeout", msg)
-                print(f"Parser API timed out after {CVPARSER_TIMEOUT} seconds")
+                track_file(file_url, "parse", "timeout", f"Parser API request timed out after {CVPARSER_TIMEOUT} seconds")  # Add the timeout value
+                print(f"Parser API timed out after {CVPARSER_TIMEOUT} seconds")  # Update to use CVPARSER_TIMEOUT variable
                 return None
                 
         except Exception as e:
