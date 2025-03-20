@@ -3,6 +3,7 @@ import sys
 import json
 import traceback
 import logging  # Added logging import
+import re  # Add re module for regex operations
 from pathlib import Path
 from typing import Dict, Any, Optional
 from docx import Document
@@ -302,6 +303,12 @@ def format_company_name(name: str) -> str:
         'de', 'van', 'der', 'den', 'von', 'und', 'les', 'la', 'el'
     }
     
+    # Ensure there is a space after hyphens
+    name = name.replace('-', '- ')
+    
+    # Remove incomplete brackets (e.g., "(stellar" -> "")
+    name = re.sub(r'\([^\)]*$', '', name)
+    
     def is_acronym(word: str) -> bool:
         """
         Check if a word is an acronym (including those with dots).
@@ -327,6 +334,15 @@ def format_company_name(name: str) -> str:
             'WHITE', 'MARTIN', 'ANDERSON', 'THOMPSON', 'WOOD'
         }
         
+        # Terms that should NOT be treated as acronyms despite being uppercase
+        not_acronyms = {
+            'CONT', 'SITE', 'GULF', 'GENERAL', 'EAST', 'WEST', 'NORTH', 'SOUTH'
+        }
+        
+        # If it's in the not_acronyms list, it's definitely not an acronym
+        if clean_word.upper() in not_acronyms:
+            return False
+        
         # If it's a known acronym, preserve it
         if clean_word in known_acronyms:
             return True
@@ -350,8 +366,8 @@ def format_company_name(name: str) -> str:
         if not text:
             return ""
             
-        # Split into words, preserving spaces around hyphens
-        text = text.replace('-', ' - ')
+        # Ensure proper spacing around hyphens
+        text = text.replace('-', ' - ').replace('  ', ' ')
         words = [w for w in text.split() if w]
         formatted_words = []
         
@@ -360,6 +376,35 @@ def format_company_name(name: str) -> str:
             word = words[i]
             word_lower = word.lower()
             word_no_dots = word_lower.replace('.', '')
+            
+            # Handle hyphen to ensure next word is capitalized
+            if word == '-' and i + 1 < len(words):
+                formatted_words.append(word)
+                i += 1
+                # Get the next word and capitalize it regardless of other rules
+                next_word = words[i]
+                # Special case for country acronyms after hyphen
+                if next_word.lower() == "ksa":
+                    formatted_words.append("KSA")
+                # Special handling for known acronyms after hyphen
+                elif is_acronym(next_word):
+                    formatted_words.append(next_word)
+                else:
+                    formatted_words.append(next_word.capitalize())
+                i += 1
+                continue
+            
+            # Special handling for country acronyms
+            if word_lower == "ksa":
+                formatted_words.append("KSA")
+                i += 1
+                continue
+                
+            # Special handling for "CONT." and similar terms
+            if word.upper() == "CONT" or word.upper() == "CONT.":
+                formatted_words.append("Cont" + ("." if word.endswith(".") else ""))
+                i += 1
+                continue
             
             # Keep hyphen as is
             if word == '-':
@@ -442,6 +487,7 @@ def format_company_name(name: str) -> str:
     
     # Join parts and ensure proper spacing
     formatted_name = ' '.join(formatted_parts).replace('  ', ' ').replace(' )', ')').strip()
+    formatted_name = re.sub(r'\([^)]*$', '', formatted_name)  # Remove any remaining incomplete brackets
     logging.debug(f"Formatted company name: {formatted_name}")
     return formatted_name
 
@@ -449,9 +495,19 @@ def format_bullet_list(items: set) -> str:
     """Format a set of items as a bullet-pointed list without leading newline."""
     if not items:
         return 'None'
+    
     # Sort items after formatting company names
     formatted_items = sorted(format_company_name(item) for item in items)
-    return "• " + "\n• ".join(formatted_items)
+    
+    # Join items with bullet points
+    bullet_list = "• " + "\n• ".join(formatted_items)
+    
+    # Ensure KSA is properly capitalized in bullet list items
+    bullet_list = bullet_list.replace(" ksa", " KSA").replace(" Ksa", " KSA")
+    bullet_list = bullet_list.replace('(ksa)', '(KSA)')  # Inside parentheses
+    bullet_list = bullet_list.replace('(Ksa)', '(KSA)')  # With first letter capitalized
+    
+    return bullet_list
 
 def format_years_experience(years: int, location: str) -> str:
     """Format years of experience into a sentence with proper pluralization."""
@@ -652,17 +708,18 @@ class DocGenerator:
         for training in trainings:
             qual_lines = []
             
-            # Add description
+            # Add description with proper formatting
             if description := training.get('description'):
-                qual_lines.append(description)
+                qual_lines.append(format_qualification_text(description))
                 
-            # Add issuing organization
+            # Add issuing organization with proper formatting
             if org := training.get('issuing_organization'):
-                qual_lines.append(f"Issued by {org}")
+                formatted_org = format_qualification_text(org)
+                qual_lines.append(f"Issued by {formatted_org}")
                 
-            # Add year
-            if year := training.get('year'):
-                qual_lines.append(f"Completed {year}")
+            # Remove the year/completion date line
+            # if year := training.get('year'):
+            #     qual_lines.append(f"Completed {year}")
                 
             # Only add if we have any lines
             if qual_lines:
@@ -709,7 +766,38 @@ class DocGenerator:
             if projects_data:
                 context.update(projects_data)
                 logging.info("Projects data added to context")
+            
+            # Apply post-processing to fix slash spacing
+            context = process_context_for_slashes(context)
+            logging.info("Applied slash spacing fixes to context")
+            
+            # DIRECT FIX: Force capitalize position fields
+            position_fields = ['nzpositions', 'internationalpositions']
+            for field in position_fields:
+                if field in context and isinstance(context[field], str):
+                    # Force capitalization of all words in position titles
+                    lines = context[field].split('\n')
+                    formatted_lines = []
+                    for line in lines:
+                        if line.startswith('• '):
+                            # Extract, format, and reconstruct the line
+                            content = line[2:].replace('/', '/ ').replace('  ', ' ')
+                            words = content.split()
+                            capitalized = ' '.join(word.capitalize() for word in words)
+                            formatted_lines.append(f'• {capitalized}')
+                        else:
+                            formatted_lines.append(line)
+                    context[field] = '\n'.join(formatted_lines)
+                    logging.info(f"Force capitalized {field}: {context[field]}")
+            
             logging.info(f"Context keys: {list(context.keys())}")
+            
+            # Print the position values for debugging
+            if 'nzpositions' in context:
+                logging.info(f"NZ Positions (after processing): {context['nzpositions']}")
+            
+            if 'internationalpositions' in context:
+                logging.info(f"International Positions (after processing): {context['internationalpositions']}")
             
             # 4. Template Loading
             logging.info("Template loading")
@@ -717,14 +805,39 @@ class DocGenerator:
                 doc = DocxTemplate(self.template_path)
                 logging.info("Template loaded successfully")
                 
-                # Check template variables
-                variables = doc.get_undeclared_template_variables()
-                logging.info(f"Template variables found: {variables}")
+                # Safety check before accessing docx attributes - prevents AttributeError
+                if doc.docx is not None and hasattr(doc.docx, 'part'):
+                    try:
+                        # Hack: Directly modify the document's XML to add spaces after slashes
+                        if hasattr(doc.docx.part, 'package') and hasattr(doc.docx.part.package, 'parts'):
+                            for part in doc.docx.part.package.parts:
+                                if part.content_type.startswith('application/vnd.openxmlformats-officedocument.wordprocessingml'):
+                                    try:
+                                        content = part.blob.decode('utf-8')
+                                        if '/' in content:
+                                            modified_content = content.replace('/', '/ ')
+                                            part.blob = modified_content.encode('utf-8')
+                                            logging.info(f"Modified XML content to add spaces after slashes")
+                                    except Exception as xml_error:
+                                        logging.warning(f"Error modifying XML content: {xml_error}")
+                        else:
+                            logging.warning("Template structure doesn't have expected attributes")
+                    except Exception as struct_error:
+                        logging.warning(f"Error accessing template structure: {struct_error}")
+                else:
+                    logging.warning("Template loaded, but docx attribute is missing required properties")
                 
-                # Check for required variables in context
-                missing_vars = [var for var in variables if var not in context]
-                if missing_vars:
-                    logging.warning(f"Missing context for variables: {missing_vars}")
+                # Check template variables
+                try:
+                    variables = doc.get_undeclared_template_variables()
+                    logging.info(f"Template variables found: {variables}")
+                    
+                    # Check for required variables in context
+                    missing_vars = [var for var in variables if var not in context]
+                    if missing_vars:
+                        logging.warning(f"Missing context for variables: {missing_vars}")
+                except Exception as var_error:
+                    logging.warning(f"Unable to process template variables: {var_error}")
                 
             except Exception as template_error:
                 logging.error(f"Template loading error: {template_error}")
@@ -738,7 +851,7 @@ class DocGenerator:
                 
                 # Generate only one output file
                 base_name = Path(json_path).stem
-                if base_name.endswith('_enriched'):
+                if (base_name.endswith('_enriched')):
                     base_name = base_name[:-9]
                 
                 # Sanitize the base name
@@ -781,16 +894,146 @@ def generate_cv_document(json_path: str, template_path: str, projects_data: Opti
     Standalone wrapper for generating a CV document.
     
     Args:
-        json_path: Path to the JSON file containing CV data
+        json_path: Path to the JSON data file
         template_path: Path to the template file
         projects_data: Optional dictionary containing additional project data
         enable_spell_check: Whether to enable spell checking (default: False)
         
     Returns:
-        str: Path to the generated document
+        str: Path to the generated CV document
     """
     generator = DocGenerator(template_path, enable_spell_check=enable_spell_check)
     return generator.generate_cv_document(json_path, projects_data)
+
+def fix_slash_spacing(text: str) -> str:
+    """
+    Ensure there is a space after every slash in the text.
+    This is a post-processor to fix formatting issues.
+    """
+    if isinstance(text, str) and '/' in text:
+        # Replace all instances of "/" with "/ " but avoid double spaces
+        result = text.replace('/', '/ ').replace('  ', ' ')
+        logging.debug(f"SLASH FIX: '{text}' -> '{result}'")
+        return result
+    return text
+
+def process_context_for_slashes(context: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Process all string values in the context dictionary to ensure proper spacing after slashes
+    and fix "AND" to "and".
+    """
+    for key, value in context.items():
+        if isinstance(value, str):
+            # Fix slash spacing
+            if '/' in value:
+                context[key] = fix_slash_spacing(value)
+                logging.info(f"Fixed slash spacing in {key}")
+            
+            # Hard fix for "AND" -> "and" when not at the start of a line or sentence
+            if " AND " in value.upper():
+                # Process line by line to avoid changing "AND" at the start of a line
+                lines = value.split('\n')
+                processed_lines = []
+                for line in lines:
+                    # For bullet points, preserve the bullet and process the rest
+                    if line.startswith('• '):
+                        bullet_content = line[2:]
+                        # Don't change "AND" at the start, only in the middle
+                        words = bullet_content.split()
+                        if len(words) > 1:
+                            # Keep first word as is
+                            processed_words = [words[0]]
+                            # Process remaining words
+                            for word in words[1:]:
+                                if word.upper() == "AND":
+                                    processed_words.append("and")
+                                else:
+                                    processed_words.append(word)
+                            processed_line = '• ' + ' '.join(processed_words)
+                        else:
+                            processed_line = line
+                    else:
+                        # For regular text, replace "AND" with "and" but not at the start
+                        processed_line = line.replace(" AND ", " and ")
+                    
+                    processed_lines.append(processed_line)
+                
+                context[key] = '\n'.join(processed_lines)
+                logging.info(f"Fixed 'AND' -> 'and' in {key}")
+        
+        elif isinstance(value, list):
+            context[key] = [fix_slash_spacing(item) if isinstance(item, str) else item for item in value]
+    
+    return context
+
+def format_qualification_text(text: str) -> str:
+    """Format qualification text with proper capitalization."""
+    if not text:
+        return ""
+    
+    # Common acronyms that should stay uppercase - expanded list
+    common_acronyms = {
+        'HSE', 'CAD', 'IT', 'OSHA', 'CPD', 'IOSH', 'NEBOSH', 'NZQA',
+        'MMJV', 'ISO', 'AWS', 'API', 'ASME', 'ANSI', 'ASTM', 'PMP', 'PMI',
+        'AWS', 'CWI', 'NDT', 'NDE', 'QA', 'QC', 'GIS', 'GPS', 'ERP', 'SAP',
+        'EWP', 'MEWP', 'AEWV', 'WTR', 'BSC', 'B.SC',    
+    }
+    
+    # Words that should be lowercase (unless at start)
+    lowercase_words = {
+        'a', 'an', 'and', 'as', 'at', 'but', 'by', 'for', 'in',
+        'of', 'on', 'or', 'the', 'to', 'with', 'from'
+    }
+    
+    # First, handle any text inside parentheses or brackets
+    # Use regex to find content inside parentheses or brackets and capitalize the first word
+    def capitalize_in_brackets(match):
+        bracket_content = match.group(1)
+        words = bracket_content.split()
+        if words:
+            words[0] = words[0].capitalize()
+            return f"({' '.join(words)})"
+        return match.group(0)
+    
+    # Apply the regex substitution to handle text in parentheses
+    text = re.sub(r'\(([^)]+)\)', capitalize_in_brackets, text)
+    
+    # Also handle square brackets if they exist
+    text = re.sub(r'\[([^]]+)\]', lambda m: f"[{m.group(1).capitalize()}]", text)
+    
+    # Split by spaces for the main text processing
+    words = text.split()
+    result = []
+    
+    # Process each word
+    for i, word in enumerate(words):
+        # Skip words inside parentheses as we've already processed them
+        if word.startswith('(') and word.endswith(')'):
+            result.append(word)
+            continue
+            
+        # Check if it's a known acronym
+        if word.upper() in common_acronyms:
+            result.append(word.upper())
+        # First word always capitalized
+        elif i == 0:
+            result.append(word.capitalize())
+        # Handle hyphenated words
+        elif '-' in word:
+            hyphen_parts = word.split('-')
+            formatted_parts = [p.capitalize() for p in hyphen_parts]
+            result.append('-'.join(formatted_parts))
+        # Common words that should be lowercase
+        elif word.lower() in lowercase_words:
+            result.append(word.lower())
+        # IMPORTANT: Words like "SITE" should be properly capitalized, not kept uppercase
+        elif word.isupper():
+            result.append(word.capitalize())  # Change from uppercase to proper case
+        # Default: capitalize first letter only
+        else:
+            result.append(word.capitalize())
+            
+    return ' '.join(result)
 
 if __name__ == "__main__":
     # Example usage:
