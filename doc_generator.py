@@ -1,12 +1,19 @@
 import os
+import sys
 import json
 import traceback
+import logging  # Added logging import
 from pathlib import Path
 from typing import Dict, Any, Optional
 from docx import Document
 from docxtpl import DocxTemplate
 from location_service import LocationService
 from spellchecker import SpellChecker
+
+# Ensure the project directory is in the Python path
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+from utils import sanitize_filename  # Import the utility function
 
 # Define paths
 TEMPLATES_DIR = 'templates'
@@ -19,6 +26,9 @@ ENABLE_SPELL_CHECK = False  # Default to False
 # Create necessary directories
 os.makedirs(OUTPUTS_DIR, exist_ok=True)
 os.makedirs(TEMPLATES_DIR, exist_ok=True)
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Initialize spell checker with industry-specific words
 def initialize_spell_checker():
@@ -51,12 +61,11 @@ def initialize_spell_checker():
     return spell
 
 def debug_spell_correction(original: str, corrected: str, word_type: str = "word"):
-    """Print debug information about spell corrections."""
+    """Log debug information about spell corrections."""
     if original != corrected:
-        print(f"\n=== SPELL CHECK DEBUG ===")
-        print(f"Original {word_type}: '{original}'")
-        print(f"Corrected {word_type}: '{corrected}'")
-        print(f"Changed: {'Yes' if original != corrected else 'No'}")
+        logging.debug(f"Original {word_type}: '{original}'")
+        logging.debug(f"Corrected {word_type}: '{corrected}'")
+        logging.debug(f"Changed: {'Yes' if original != corrected else 'No'}")
 
 def auto_correct_text(text: str, spell: SpellChecker, word_type: str = "text") -> str:
     """
@@ -118,7 +127,7 @@ def spell_check_context(context: Dict[str, Any], spell: SpellChecker) -> Dict[st
     """
     Apply spell checking focused on job titles and employers.
     """
-    print("\n=== STARTING SPELL CHECK ===")
+    logging.info("Starting spell check")
     
     # Focus only on employment-related fields
     employer_fields = ['nzemployers', 'internationalemployers']
@@ -128,7 +137,7 @@ def spell_check_context(context: Dict[str, Any], spell: SpellChecker) -> Dict[st
     for field in employer_fields:
         if field in context and isinstance(context[field], str):
             if context[field] != "None":
-                print(f"\nChecking employers in {field}:")
+                logging.info(f"Checking employers in {field}:")
                 lines = context[field].split('\n')
                 corrected_lines = []
                 for line in lines:
@@ -144,19 +153,19 @@ def spell_check_context(context: Dict[str, Any], spell: SpellChecker) -> Dict[st
     for field in position_fields:
         if field in context and isinstance(context[field], str):
             if context[field] != "None":
-                print(f"\nChecking job titles in {field}:")
+                logging.info(f"Checking job titles in {field}:")
                 lines = context[field].split('\n')
                 corrected_lines = []
                 for line in lines:
                     if line.startswith('• '):
-                        original = line[2:].strip()
+                        original = line[2:].trip()
                         corrected = auto_correct_text(original, spell, "job title")
                         corrected_lines.append(f"• {corrected}")
                     else:
                         corrected_lines.append(line)
                 context[field] = '\n'.join(corrected_lines)
     
-    print("\n=== SPELL CHECK COMPLETE ===")
+    logging.info("Spell check complete")
     return context
 
 def format_name(name_str: str) -> str:
@@ -246,7 +255,7 @@ def load_company_suffixes():
         
         return suffixes
     except Exception as e:
-        print(f"Error loading company suffixes: {e}")
+        logging.error(f"Error loading company suffixes: {e}")
         # Return default suffixes as fallback
         return {
             'lp': 'LP', 'llc': 'LLC', 'ltd': 'Ltd', 'inc': 'Inc',
@@ -258,18 +267,26 @@ def load_company_suffixes():
 # Cache for company suffixes
 _COMPANY_SUFFIXES = None
 
+# Global cache for short words
+_SHORT_WORDS = None
+
+def load_short_words():
+    """Load short words from short_words.json file."""
+    try:
+        with open('/Users/claytonbadland/flask_project/data/short_words.json', 'r') as f:
+            return set(json.load(f))
+    except Exception as e:
+        logging.error(f"Error loading short words: {e}")
+        return set()
+
+# Load short words during initialization
+_SHORT_WORDS = load_short_words()
+
 def format_company_name(name: str) -> str:
     """
     Format company names with special handling for acronyms, parentheses, and company suffixes.
-    
-    Examples:
-        'MSS -mechanical Support System (stellar Recruitment Lp)' -> 'MSS - Mechanical Support System (Stellar Recruitment LP)'
-        'Advance Engineering AND Maintenance Company W.I.I' -> 'Advance Engineering and Maintenance Company W.I.I'
-        'IBM' -> 'IBM'
-        'ADVANCE ENGINEERING AND MAINTENANCE' -> 'Advance Engineering and Maintenance'
-        'ANZ Bank' -> 'ANZ Bank'
-        'BNZ BANKING GROUP' -> 'BNZ Banking Group'
-        'TECH-CORP SOLUTIONS' -> 'Tech - Corp Solutions'
+    Ensures proper spacing outside parentheses and removes spaces inside parentheses, including before the closing parenthesis.
+    Handles words of 3 letters or less based on a predefined list.
     """
     if not name:
         return ""
@@ -365,8 +382,14 @@ def format_company_name(name: str) -> str:
             if found_suffix:
                 continue
                 
+            # Handle words of 3 letters or less
+            if len(word) <= 3:
+                if any(word_lower == w.lower() for w in _SHORT_WORDS):  # Normalize case for comparison
+                    formatted_words.append(word)  # Preserve original capitalization
+                else:
+                    formatted_words.append(word.upper())  # Capitalize entirely
             # Check if word is an acronym
-            if is_acronym(word):
+            elif is_acronym(word):
                 formatted_words.append(word)
             # Handle common words (lowercase unless at start)
             elif word_lower in common_words and formatted_words:
@@ -379,6 +402,9 @@ def format_company_name(name: str) -> str:
             
         return ' '.join(formatted_words)
     
+    # Ensure proper spacing around parentheses
+    name = name.replace('(', ' (').replace(')', ') ')
+    
     # Split the name into parts based on parentheses
     parts = []
     current = []
@@ -387,32 +413,37 @@ def format_company_name(name: str) -> str:
     for char in name:
         if char == '(':
             if current:
-                parts.append(''.join(current))
+                parts.append(''.join(current).strip())
                 current = []
             in_parentheses = True
+            current.append('(')  # Keep parentheses without extra spaces
         elif char == ')':
             if current:
-                parts.append('(' + ''.join(current) + ')')
+                parts.append(''.join(current).strip())
                 current = []
             in_parentheses = False
+            current.append(')')
         else:
             current.append(char)
     
     if current:
-        parts.append(''.join(current))
+        parts.append(''.join(current).strip())
     
     # Format each part
     formatted_parts = []
     for part in parts:
         if part.startswith('(') and part.endswith(')'):
-            # Format content inside parentheses
-            inner_content = part[1:-1]
+            # Format content inside parentheses and remove spaces
+            inner_content = part[1:-1].strip().replace(' ', '')
             formatted_inner = format_part(inner_content, True)
             formatted_parts.append(f"({formatted_inner})")
         else:
             formatted_parts.append(format_part(part))
     
-    return ''.join(formatted_parts)
+    # Join parts and ensure proper spacing
+    formatted_name = ' '.join(formatted_parts).replace('  ', ' ').replace(' )', ')').strip()
+    logging.debug(f"Formatted company name: {formatted_name}")
+    return formatted_name
 
 def format_bullet_list(items: set) -> str:
     """Format a set of items as a bullet-pointed list without leading newline."""
@@ -439,50 +470,20 @@ def round_up_years(months: int) -> int:
 class DocGenerator:
     """Document generator for CV documents."""
     
-    def __init__(self, template_path: str = CURRENT_TEMPLATE, enable_spell_check: bool = ENABLE_SPELL_CHECK):
-        """Initialize the DocGenerator with a template path."""
-        self.template_path = template_path
-        self.enable_spell_check = enable_spell_check
-        self.spell = initialize_spell_checker() if enable_spell_check else None
-        
-        if not os.path.exists(template_path):
-            raise FileNotFoundError(f"Template file not found: {template_path}")
-            
-    def generate_document(self, json_path: str) -> Optional[str]:
+    def __init__(self, template_path: str, enable_spell_check: bool = ENABLE_SPELL_CHECK):
         """
-        Generate a document from a JSON file.
+        Initialize the document generator with the template path.
         
         Args:
-            json_path: Path to the JSON file containing CV data
-            
-        Returns:
-            Optional[str]: Path to the generated document, or None if generation failed
+            template_path: Path to the template file
+            enable_spell_check: Whether to enable spell checking (default: False)
         """
-        try:
-            # Extract base name from JSON path
-            base_name = Path(json_path).stem
-            
-            # Load and prepare CV data
-            with open(json_path, 'r', encoding='utf-8') as f:
-                cv_data = json.load(f)
-                
-            # Prepare context for template
-            context = self.prepare_context(cv_data)
-            
-            # Load template and render document
-            template = DocxTemplate(self.template_path)
-            template.render(context)
-            
-            # Save the document
-            output_path = os.path.join(OUTPUTS_DIR, f"{base_name}_generated.docx")
-            template.save(output_path)
-            
-            return output_path
-            
-        except Exception as e:
-            print(f"Error generating document: {str(e)}")
-            traceback.print_exc()
-            return None
+        if not os.path.exists(template_path):
+            raise FileNotFoundError(f"Template file not found at: {template_path}")
+        self.template_path = template_path
+        self.location_service = LocationService()
+        self.enable_spell_check = enable_spell_check
+        self.spell = initialize_spell_checker() if enable_spell_check else None
 
     def prepare_context(self, cv_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -531,18 +532,16 @@ class DocGenerator:
         
         # Get blurb directly from profile, not from basics
         blurb = profile.get('blurb', '')
-        print("\n=== BLURB DEBUG ===")
-        print(f"Raw blurb from profile: {blurb}")
+        logging.debug(f"Raw blurb from profile: {blurb}")
         context['blurb'] = blurb
-        print(f"Final blurb in context: {context['blurb']}")
+        logging.debug(f"Final blurb in context: {context['blurb']}")
         
         # Extract city from address
         full_address = basics.get('address', '')
         city = extract_city_from_address(full_address)
         context['location'] = city
-        print(f"\n=== LOCATION DEBUG ===")
-        print(f"Full address: {full_address}")
-        print(f"Extracted city: {city}")
+        logging.info(f"Full address: {full_address}")
+        logging.info(f"Extracted city: {city}")
         
         # Professional Experience - Split into NZ and International using is_nz flag
         experiences = profile.get('professional_experiences', [])
@@ -558,7 +557,7 @@ class DocGenerator:
         nz_positions = set()
         international_positions = set()
         
-        print("\n=== EXPERIENCE DURATION DEBUG ===")
+        logging.info("Experience duration debug")
         
         # Process each experience entry
         for exp in experiences:
@@ -577,18 +576,18 @@ class DocGenerator:
             try:
                 duration_months = exp.get('duration_in_months')
                 if duration_months is None:
-                    print(f"WARNING: No duration_in_months for {formatted_exp['company']}, defaulting to 0")
+                    logging.warning(f"No duration_in_months for {formatted_exp['company']}, defaulting to 0")
                     duration_months = 0
                 elif isinstance(duration_months, str):
                     duration_months = int(duration_months)
                 elif not isinstance(duration_months, int):
-                    print(f"WARNING: Invalid duration_in_months type for {formatted_exp['company']}: {type(duration_months)}")
+                    logging.warning(f"Invalid duration_in_months type for {formatted_exp['company']}: {type(duration_months)}")
                     duration_months = 0
             except (ValueError, TypeError) as e:
-                print(f"ERROR: Could not parse duration for {formatted_exp['company']}: {e}")
+                logging.error(f"Could not parse duration for {formatted_exp['company']}: {e}")
                 duration_months = 0
                     
-            print(f"Experience at {formatted_exp['company']}: {duration_months} months")
+            logging.info(f"Experience at {formatted_exp['company']}: {duration_months} months")
             
             # Add duration to appropriate category based on is_nz flag
             if exp.get('is_nz', False):
@@ -620,11 +619,10 @@ class DocGenerator:
             total_years = nz_years + international_years
         
         # Update total years in the JSON structure
-        print(f"\n=== YEARS CALCULATION DEBUG ===")
-        print(f"Total months: {total_months} (rounded up to {total_years} years)")
-        print(f"NZ months: {nz_months} (rounded up to {nz_years} years)")
-        print(f"International months: {international_months} (initial round up to {initial_international_years} years, adjusted to {international_years} years)")
-        print(f"Final total years (NZ + International): {total_years}")
+        logging.info(f"Total months: {total_months} (rounded up to {total_years} years)")
+        logging.info(f"NZ months: {nz_months} (rounded up to {nz_years} years)")
+        logging.info(f"International months: {international_months} (initial round up to {initial_international_years} years, adjusted to {international_years} years)")
+        logging.info(f"Final total years (NZ + International): {total_years}")
         
         # Update the JSON structure with calculated years
         if 'data' in cv_data:
@@ -675,12 +673,108 @@ class DocGenerator:
         
         # Apply spell checking to the context only if enabled
         if self.enable_spell_check:
-            print("\n=== SPELL CHECK ENABLED ===")
+            logging.info("Spell check enabled")
             context = spell_check_context(context, self.spell)
         else:
-            print("\n=== SPELL CHECK DISABLED ===")
+            logging.info("Spell check disabled")
         
+        logging.info("Context preparation complete")
         return context
+
+    def generate_cv_document(self, json_path: str, projects_data: Optional[Dict] = None) -> str:
+        """
+        Generate a formatted CV document from the provided JSON data.
+        """
+        try:
+            logging.info("Starting document generation")
+            # 1. Template Verification
+            logging.info(f"Template path: {self.template_path}")
+            logging.info(f"Template exists: {os.path.exists(self.template_path)}")
+            template_size = os.path.getsize(self.template_path) if os.path.exists(self.template_path) else 'N/A'
+            logging.info(f"Template size: {template_size} bytes")
+            
+            if not os.path.exists(self.template_path):
+                raise FileNotFoundError(f"Template file not found at: {self.template_path}")
+            
+            # 2. JSON Data Loading
+            logging.info(f"JSON path: {json_path}")
+            logging.info(f"JSON exists: {os.path.exists(json_path)}")
+            with open(json_path, 'r', encoding='utf-8') as f:
+                cv_data = json.load(f)
+            logging.info("JSON data loaded successfully")
+            
+            # 3. Context Preparation
+            logging.info("Context preparation")
+            context = self.prepare_context(cv_data)
+            if projects_data:
+                context.update(projects_data)
+                logging.info("Projects data added to context")
+            logging.info(f"Context keys: {list(context.keys())}")
+            
+            # 4. Template Loading
+            logging.info("Template loading")
+            try:
+                doc = DocxTemplate(self.template_path)
+                logging.info("Template loaded successfully")
+                
+                # Check template variables
+                variables = doc.get_undeclared_template_variables()
+                logging.info(f"Template variables found: {variables}")
+                
+                # Check for required variables in context
+                missing_vars = [var for var in variables if var not in context]
+                if missing_vars:
+                    logging.warning(f"Missing context for variables: {missing_vars}")
+                
+            except Exception as template_error:
+                logging.error(f"Template loading error: {template_error}")
+                raise
+            
+            # 5. Document Generation
+            logging.info("Document generation")
+            try:
+                doc.render(context)
+                logging.info("Template rendering completed")
+                
+                # Generate only one output file
+                base_name = Path(json_path).stem
+                if base_name.endswith('_enriched'):
+                    base_name = base_name[:-9]
+                
+                # Sanitize the base name
+                sanitized_base_name = sanitize_filename(base_name)
+                
+                # Use the sanitized name for the output path
+                output_path = os.path.join(OUTPUTS_DIR, f"{sanitized_base_name}_CV.docx")
+                
+                # Save document
+                logging.info(f"Saving document to: {output_path}")
+                doc.save(output_path)
+                
+                # Verify output
+                if os.path.exists(output_path):
+                    output_size = os.path.getsize(output_path)
+                    logging.info(f"Output file created successfully. Size: {output_size} bytes")
+                    if output_size == 0:
+                        raise ValueError("Generated file is empty")
+                    
+                    # Track the file creation
+                    from file_tracker import track_file
+                    track_file(output_path, "generate", "created", "Final document generated")
+                    
+                    logging.info("Document generated successfully")
+                    return output_path
+                else:
+                    raise FileNotFoundError("Output file was not created")
+                
+            except Exception as render_error:
+                logging.error(f"Document generation error: {render_error}")
+                raise
+                
+        except Exception as e:
+            logging.error(f"Error during document generation: {e}")
+            traceback.print_exc()
+            raise
 
 def generate_cv_document(json_path: str, template_path: str, projects_data: Optional[Dict] = None, enable_spell_check: bool = ENABLE_SPELL_CHECK) -> str:
     """
@@ -696,18 +790,19 @@ def generate_cv_document(json_path: str, template_path: str, projects_data: Opti
         str: Path to the generated document
     """
     generator = DocGenerator(template_path, enable_spell_check=enable_spell_check)
-    return generator.generate_document(json_path)
+    return generator.generate_cv_document(json_path, projects_data)
 
 if __name__ == "__main__":
     # Example usage:
+    logging.info("Starting main execution")
     test_json_path = "parsed_jsons/test_data_enriched.json"
     template_path = os.path.join(TEMPLATES_DIR, 'Current_template.docx')
     
     if os.path.exists(test_json_path):
         try:
             output_path = generate_cv_document(test_json_path, template_path)
-            print(f"Document generated successfully at: {output_path}")
+            logging.info(f"Document generated successfully at: {output_path}")
         except Exception as e:
-            print(f"Failed to generate document: {e}")
+            logging.error(f"Failed to generate document: {e}")
     else:
-        print(f"Test file not found: {test_json_path}")
+        logging.error(f"Test file not found: {test_json_path}")
