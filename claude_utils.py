@@ -1,7 +1,7 @@
 import os
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, Union  # Add Union to imports
 from dotenv import load_dotenv
 from anthropic import Anthropic
 import ast
@@ -10,6 +10,7 @@ import time
 from firebase_utils import upload_file
 from template_formatter import format_name
 import requests
+import logging  # Add logging import for error messages
 
 # Environment and constants
 PROJECT_ROOT = Path(__file__).parent
