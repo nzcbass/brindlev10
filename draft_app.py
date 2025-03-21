@@ -258,17 +258,24 @@ def download_file(filename):
             logging.warning(f"Download failed - File not found: {filename}")
             raise FileNotFoundError(f"File not found: {filename}")
         
-        # Save the file to the Downloads folder
-        download_path = save_output_to_downloads(file_path)
-        if not download_path:
-            logging.error(f"Failed to save file to Downloads folder for {filename}")
-            raise Exception("Failed to save file to Downloads folder")
+        # Extract the base name without file extension
+        base_name = Path(filename).stem
+        if base_name.endswith('_CV'):
+            base_name = base_name[:-3]  # Remove "_CV" suffix
+            
+        # Create a clean filename with underscore format
+        clean_filename = f"{sanitize_filename(base_name)}_CV{Path(filename).suffix}"
         
-        logging.info(f"File saved successfully to Downloads folder for {filename}")
+        # Only serve the file directly - DO NOT save to Downloads
+        # The browser will handle saving to Downloads folder
+        logging.info(f"Serving file: {filename}")
+        
+        # Return the file as an attachment with the clean filename
         return send_from_directory(
             os.path.join(app.root_path, 'outputs'),
             filename, 
-            as_attachment=True
+            as_attachment=True,
+            download_name=clean_filename  # Use this name for the downloaded file
         )
         
     except Exception as e:
